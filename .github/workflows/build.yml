@@ -1,0 +1,105 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  build-foundry:
+    name: Foundry project
+    strategy:
+      matrix:
+        platform: [ubuntu-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      # 设置 Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      # Install npm dependencies, including erc-payable-token
+      - name: Clean and reinstall npm dependencies
+        run: |
+          rm -rf node_modules
+          npm cache clean --force
+          npm install
+
+      - name: Write remappings once
+        run: |
+          echo "erc-payable-token/=node_modules/erc-payable-token/" > remappings.txt
+          forge remappings >> remappings.txt
+
+      # 确认 remappings 文件内容
+      - name: Check remappings
+        run: cat remappings.txt
+
+      # Debugging: Check if the installed package exists
+      - name: Check erc-payable-token existence
+        run: |
+          ls -l node_modules/erc-payable-token/contracts/token/
+
+      - name: Verify erc-payable-token directory
+        run: find node_modules/erc-payable-token/contracts/token/ERC1363/
+
+      - name: Run Forge build
+        run: |
+          forge --version
+          forge build --sizes
+        id: build
+
+      - name: Run Forge fmt
+        run: |
+          forge fmt
+        id: fmt
+
+      - name: Run Forge tests
+        run: |
+          forge test -vvv
+        id: test
+
+      - name: Generate Forge snapshot
+        run: |
+          forge snapshot
+        id: snapshot
+
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v2
+        id: git-cliff
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          config: cliff.toml
+          args: -vv --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+
+      - name: Debug changelog output
+        run: echo "${{ steps.git-cliff.outputs.content }}"
+        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          body: ${{ steps.git-cliff.outputs.content }}
